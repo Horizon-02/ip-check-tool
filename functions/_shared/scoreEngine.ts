@@ -33,9 +33,10 @@ export function calculateScore(check: any): any {
   }
   abuseScore = Math.max(0, abuseScore)
 
-  // Env consistency (0-10) - always 5 on server side
-  const envScore = 5
-  deductions.push({ amount: 5, reason: 'Browser checks not available server-side', reasonZh: '浏览器检查仅客户端可用', source: 'server', field: 'consistency' })
+  // Environment consistency is informational only.
+  // Browser-level checks (timezone, WebRTC, DNS) reflect HOW the user connects,
+  // not the IP's intrinsic quality. Shown separately, not scored.
+  const envScore = 10
 
   // Network quality (0-10)
   let nqScore = 10
@@ -74,8 +75,8 @@ export function calculateScore(check: any): any {
       { category: 'Geo Trust', categoryZh: '地理位置可信度', maxScore: 15, score: geoScore, deductions: deductions.filter(d => ['geo'].includes(d.source)) },
       { category: 'Network Type', categoryZh: '网络类型', maxScore: 15, score: ntScore, deductions: [] },
       { category: 'Proxy Risk', categoryZh: '代理风险', maxScore: 25, score: proxyScore, deductions: deductions.filter(d => ['isVpn', 'isProxy', 'isTor', 'isHosting', 'isRelay', 'isResidentialProxy'].includes(d.field)) },
-      { category: 'Abuse Risk', categoryZh: '滥用风险', maxScore: 25, score: abuseScore, deductions: deductions.filter(d => ['confidenceScore'].includes(d.field) || d.field?.startsWith?.('bl.')) },
-      { category: 'Environment Consistency', categoryZh: '环境一致性', maxScore: 10, score: envScore, deductions: deductions.filter(d => d.field === 'consistency') },
+      { category: 'Abuse Risk', categoryZh: '滥用风险', maxScore: 25, score: abuseScore, deductions: deductions.filter(d => d.field === 'confidenceScore' || (d.source === 'DNSBL' || d.source === 'AbuseIPDB')) },
+      { category: 'Environment Consistency', categoryZh: '环境一致性（信息参考）', maxScore: 10, score: 10, deductions: [] },
       { category: 'Network Quality', categoryZh: '网络质量', maxScore: 10, score: nqScore, deductions: [] },
     ],
     keyFindings: [`Score: ${total}/100`, riskLevel],

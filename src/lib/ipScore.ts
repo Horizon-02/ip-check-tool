@@ -281,68 +281,22 @@ function calculateAbuseRisk(
 // Scoring dimension: envConsistency (0-10)
 // ---------------------------------------------------------------------------
 
+/**
+ * Environment consistency is informational only — it detects browser-level
+ * configuration (timezone, language, WebRTC, DNS) which reflects HOW the user
+ * connects, not the IP's intrinsic quality.
+ *
+ * Timezone/WebRTC mismatches are EXPECTED when using a proxy and should NOT
+ * penalize the IP score. These are shown as a separate informational panel.
+ */
 function calculateEnvConsistency(
-  consistency: ConsistencyCheck | null | undefined,
-  deductions: ScoreDeduction[],
+  _consistency: ConsistencyCheck | null | undefined,
+  _deductions: ScoreDeduction[],
 ): number {
-  if (!consistency) {
-    deductions.push({
-      amount: 5,
-      reason: 'Browser environment consistency data not collected',
-      reasonZh: '未收集浏览器环境一致性数据',
-      source: 'consistency',
-      field: 'consistency',
-    })
-    return 5
-  }
-
-  let score = 10
-
-  if (!consistency.timezoneMatch) {
-    deductions.push({
-      amount: 4,
-      reason: `Timezone mismatch: expected ${consistency.timezoneExpected}, actual ${consistency.timezoneActual}`,
-      reasonZh: `时区不匹配：期望 ${consistency.timezoneExpected}，实际 ${consistency.timezoneActual}`,
-      source: 'consistency',
-      field: 'timezoneMatch',
-    })
-    score -= 4
-  }
-
-  if (!consistency.languageMatch) {
-    deductions.push({
-      amount: 3,
-      reason: `Language mismatch: expected [${consistency.languageExpected.join(', ')}], actual [${consistency.languageActual.join(', ')}]`,
-      reasonZh: `语言不匹配：期望 [${consistency.languageExpected.join(', ')}]，实际 [${consistency.languageActual.join(', ')}]`,
-      source: 'consistency',
-      field: 'languageMatch',
-    })
-    score -= 3
-  }
-
-  if (!consistency.dnsMatch) {
-    deductions.push({
-      amount: 3,
-      reason: `DNS mismatch: ${consistency.dnsNote}`,
-      reasonZh: `DNS不匹配：${consistency.dnsNote}`,
-      source: 'consistency',
-      field: 'dnsMatch',
-    })
-    score -= 3
-  }
-
-  if (!consistency.webrtcMatch) {
-    deductions.push({
-      amount: 3,
-      reason: `WebRTC mismatch: ${consistency.webrtcNote}`,
-      reasonZh: `WebRTC不匹配：${consistency.webrtcNote}`,
-      source: 'consistency',
-      field: 'webrtcMatch',
-    })
-    score -= 3
-  }
-
-  return Math.max(0, score)
+  // Always return full marks — environment checks are informational only.
+  // The IP score focuses on IP-intrinsic qualities: geo, network type,
+  // proxy detection, abuse history, and network quality.
+  return 10
 }
 
 // ---------------------------------------------------------------------------

@@ -1,45 +1,87 @@
 import type { ConsistencyCheck } from '../types/ipCheck'
 
+// Public STUN servers — needed for WebRTC ICE candidate gathering.
+// Reference: jason5ng32/MyIP (10.3k stars) uses 4 servers; we use 2 key ones.
+const STUN_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+]
+
+// Match both IPv4 and IPv6 addresses in ICE candidates
+// Reference: MyIP's CANDIDATE_IP_RE
+const CANDIDATE_IP_RE = /([0-9a-f]{1,4}(:[0-9a-f]{1,4}){7}|[0-9a-f]{0,4}(:[0-9a-f]{1,4}){0,6}::[0-9a-f]{0,4}|::[0-9a-f]{1,4}(:[0-9a-f]{1,4}){0,6}|[0-9]{1,3}(\.[0-9]{1,3}){3})/i
+
 /**
- * Attempt to detect the local IP address via WebRTC.
- * Creates a minimal RTCPeerConnection, generates an offer, and inspects
- * ICE candidates for the local IP. Never establishes a real connection.
- * Returns null on failure, timeout (3s), or if WebRTC is unavailable.
+ * Detect the real public IP via WebRTC STUN.
+ * Only accepts server-reflexive (srflx) candidates — these prove the STUN
+ * server responded with the client's public IP. Host candidates are ignored
+ * because they only show local network IPs.
+ *
+ * Reference: jason5ng32/MyIP checkSTUNServer() — only srflx/prflx candidates
  */
 export async function detectWebRtcIp(): Promise<string | null> {
   try {
-    const pc = new RTCPeerConnection({ iceServers: [] })
+    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS })
     pc.createDataChannel('')
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
 
     return new Promise<string | null>((resolve) => {
-      const fallbackTimer = setTimeout(() => {
+      let settled = false
+      const finish = (ip: string | null) => {
+        if (settled) return
+        settled = true
         pc.close()
-        resolve(null)
-      }, 3000)
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          const match =
-            /([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(event.candidate.candidate)
-          if (match) {
-            clearTimeout(fallbackTimer)
-            pc.close()
-            resolve(match[1])
-          }
-        }
+        resolve(ip)
       }
 
-      // If no candidate fires within 2 s, give up
-      setTimeout(() => {
-        clearTimeout(fallbackTimer)
-        pc.close()
-        resolve(null)
-      }, 2000)
+      const timer = setTimeout(() => finish(null), 5000)
+
+      pc.onicecandidate = (event) => {
+        if (!event.candidate || settled) return
+        const candidate = event.candidate.candidate
+        // Candidate format: "candidate:... typ <type> ..."
+        // Only srflx (server-reflexive) proves STUN worked.
+        // prflx (peer-reflexive) can also contain the public IP.
+        const parts = candidate.split(' ')
+        const type = parts[7]
+        if (type !== 'srflx' && type !== 'prflx') return
+
+        const match = CANDIDATE_IP_RE.exec(candidate)
+        if (match && match[0]) {
+          clearTimeout(timer)
+          finish(match[0])
+        }
+      }
     })
   } catch {
     return null
+  }
+}
+
+/**
+ * Check DNS consistency by comparing the IP that Cloudflare sees
+ * with the reported public IP. A mismatch suggests DNS-level proxying
+ * or a DNS leak.
+ */
+export async function detectDnsConsistency(reportedIp: string): Promise<{ match: boolean; note: string }> {
+  try {
+    // Cloudflare's trace endpoint returns the IP of the TCP connection
+    const resp = await fetch('https://cloudflare.com/cdn-cgi/trace')
+    const text = await resp.text()
+    const cfIp = /ip=([^\n]+)/.exec(text)?.[1]
+    if (!cfIp) {
+      return { match: false, note: 'Could not detect connection IP via Cloudflare trace' }
+    }
+    const match = cfIp === reportedIp
+    return {
+      match,
+      note: match
+        ? `Connection IP (${cfIp}) matches reported IP`
+        : `Connection IP (${cfIp}) differs from reported IP (${reportedIp}) — possible DNS/proxy manipulation`,
+    }
+  } catch (e) {
+    return { match: false, note: `DNS consistency check failed: ${e instanceof Error ? e.message : 'network error'}` }
   }
 }
 
@@ -66,21 +108,21 @@ export function collectBrowserSignals(
   return {
     timezoneMatch: ipTimezone
       ? normalizeTimezone(browserTz) === normalizeTimezone(ipTimezone)
-      : false,
+      : true,  // Don't penalize when IP timezone data unavailable
     timezoneExpected: ipTimezone ?? browserTz,
     timezoneActual: browserTz,
 
     languageMatch: ipLanguages
       ? arraysEqualIgnoringCase(browserLangs, ipLanguages)
-      : false,
+      : true,  // Don't penalize when IP language data unavailable
     languageExpected: ipLanguages ?? browserLangs,
     languageActual: browserLangs,
 
     dnsMatch: false,
-    dnsNote: 'DNS comparison requires server-side resolver data',
+    dnsNote: 'DNS check pending; call detectDnsConsistency()',
 
     webrtcMatch: false,
-    webrtcNote: 'WebRTC check pending; call detectWebRtcIp() and compare with IP address',
+    webrtcNote: 'WebRTC check pending; call detectWebRtcIp()',
   }
 }
 

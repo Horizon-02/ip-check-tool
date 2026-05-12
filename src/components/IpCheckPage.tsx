@@ -51,7 +51,9 @@ import { checkIpScore, ApiError } from '../lib/api'
 import {
   collectBrowserSignals,
   detectWebRtcIp,
+  detectDnsConsistency,
 } from '../lib/envConsistency'
+import { calculateIpScore } from '../lib/ipScore'
 
 // ---------------------------------------------------------------------------
 // History
@@ -914,7 +916,7 @@ function NetworkQualitySection({
         label="Connectivity Score"
         labelZh="连接质量评分"
         value={
-          <span className="font-mono">{quality.connectivityScore}/100</span>
+          <span className="font-mono">{quality.connectivityScore}/10</span>
         }
       />
     </div>
@@ -943,54 +945,47 @@ export function IpCheckPage() {
     setData(result)
     setError(null)
 
-    // Collect browser signals and reconcile with geo data
+    // Collect browser signals with geo context for proper timezone/language matching
     const browserSignals = collectBrowserSignals(
       result.geo.timezone,
       result.consistency?.languageExpected ?? undefined,
     )
 
-    // Attempt WebRTC detection in the background
-    detectWebRtcIp().then((webrtcIp) => {
-      const webrtcMatch = webrtcIp === result.ip
-      // Update consistency with WebRTC info if available
-      // We store this in a local update — for now it's informative
-      if (webrtcIp) {
-        setData((prev) => {
-          if (!prev) return prev
-          return {
-            ...prev,
-            consistency: prev.consistency
-              ? {
-                  ...prev.consistency,
-                  webrtcMatch,
-                  webrtcNote: webrtcMatch
-                    ? `WebRTC IP (${webrtcIp}) matches checked IP address`
-                    : `WebRTC IP (${webrtcIp}) differs from checked IP (${prev.ip})`,
-                }
-              : {
-                  ...browserSignals,
-                  webrtcMatch,
-                  webrtcNote: `WebRTC local IP: ${webrtcIp}`,
-                },
-          }
-        })
-      }
-    })
-
-    // Update consistency with browser signals
+    // Initial consistency update + re-score with client-side scoring engine.
+    // WebRTC and DNS checks run async and will update + re-score again on completion.
     setData((prev) => {
       if (!prev) return prev
-      return {
-        ...prev,
-        consistency: {
-          ...browserSignals,
-          dnsMatch: prev.consistency?.dnsMatch ?? false,
-          dnsNote: prev.consistency?.dnsNote ?? 'DNS comparison requires server-side resolver data',
-          webrtcMatch: prev.consistency?.webrtcMatch ?? false,
-          webrtcNote: prev.consistency?.webrtcNote ?? 'WebRTC check pending',
-        },
-      }
+      const initialConsistency = { ...browserSignals }
+      const clientScore = calculateIpScore({ ...prev, consistency: initialConsistency })
+      return { ...prev, consistency: initialConsistency, score: clientScore }
     })
+
+    // Run WebRTC and DNS checks in parallel, then re-score with full results
+    const applyAsyncChecks = async () => {
+      const [webrtcIp, dnsResult] = await Promise.all([
+        detectWebRtcIp(),
+        detectDnsConsistency(result.ip),
+      ])
+
+      setData((prev) => {
+        if (!prev || !prev.consistency) return prev
+        const webrtcMatch = webrtcIp ? webrtcIp === prev.ip : false
+        const updatedConsistency = {
+          ...prev.consistency,
+          webrtcMatch,
+          webrtcNote: webrtcIp
+            ? (webrtcMatch
+                ? `WebRTC IP (${webrtcIp}) matches checked IP`
+                : `WebRTC IP (${webrtcIp}) differs from checked IP (${prev.ip})`)
+            : 'WebRTC unavailable (no STUN response)',
+          dnsMatch: dnsResult.match,
+          dnsNote: dnsResult.note,
+        }
+        const clientScore = calculateIpScore({ ...prev, consistency: updatedConsistency })
+        return { ...prev, consistency: updatedConsistency, score: clientScore }
+      })
+    }
+    applyAsyncChecks()
 
     // Check for partial failures
     if (result.dataSources && result.dataSources.length > 0) {
@@ -1029,10 +1024,10 @@ export function IpCheckPage() {
       setPartialWarnings([])
 
       const signal = abortRef.current?.signal
-      // Collect browser signals before API call so server can use them for scoring
-      const browserConsistency = collectBrowserSignals()
       try {
-        const result = await checkIpScore(ip, signal, browserConsistency)
+        // Don't send consistency yet — we need geo data for proper timezone/language matching.
+        // Client-side re-scoring in handleResult will apply the correct consistency score.
+        const result = await checkIpScore(ip, signal, undefined)
         // Only process if this request wasn't superseded
         if (abortRef.current?.signal === signal) {
           handleResult(result)
@@ -1434,8 +1429,8 @@ export function IpCheckPage() {
 
               <ExpandableSection
                 icon={<Monitor className="w-4 h-4" />}
-                title="Environment Consistency"
-                titleZh="环境一致性"
+                title="Browser Environment (informational)"
+                titleZh="浏览器环境（信息参考，不计入IP评分）"
                 badge={
                   data.consistency ? (
                     <span className="text-xs">
