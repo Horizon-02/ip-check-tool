@@ -1029,8 +1029,10 @@ export function IpCheckPage() {
       setPartialWarnings([])
 
       const signal = abortRef.current?.signal
+      // Collect browser signals before API call so server can use them for scoring
+      const browserConsistency = collectBrowserSignals()
       try {
-        const result = await checkIpScore(ip, signal)
+        const result = await checkIpScore(ip, signal, browserConsistency)
         // Only process if this request wasn't superseded
         if (abortRef.current?.signal === signal) {
           handleResult(result)

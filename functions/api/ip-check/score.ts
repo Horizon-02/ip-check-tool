@@ -4,9 +4,11 @@ import type { DataSourceInfo } from '../../_shared/types'
 
 export const onRequestPost: PagesFunction = async (ctx) => {
   let ip: string
+  let clientConsistency: any = null
   try {
     const body: any = await ctx.request.json()
     ip = body?.ip?.trim() || ctx.request.headers.get('CF-Connecting-IP') || '127.0.0.1'
+    clientConsistency = body?.consistency ?? null
   } catch {
     ip = ctx.request.headers.get('CF-Connecting-IP') || '127.0.0.1'
   }
@@ -33,7 +35,7 @@ export const onRequestPost: PagesFunction = async (ctx) => {
     proxyDetection: ipapi.proxyDetection,
     abuseRecord: abuse?.abuseRecord ?? null,
     blacklistRecords: dnsbl.blacklistRecords,
-    consistency: null,
+    consistency: clientConsistency,
     networkQuality: network.networkQuality,
     dataSources,
     checkedAt: new Date().toISOString(),

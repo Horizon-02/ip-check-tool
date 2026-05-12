@@ -82,7 +82,7 @@ export async function callAbuseIPDB(ip: string): Promise<{
     const latency = Date.now() - start
     const record = json?.data
     const abuseRecord: AbuseRecord = { confidenceScore: record?.abuseConfidenceScore ?? 0, totalReports: record?.totalReports ?? 0, lastReportedAt: record?.lastReportedAt ?? null, categories: [], source: 'AbuseIPDB' }
-    return { abuseRecord, blacklistRecords: [{ listed: record?.totalReports > 0, listName: 'AbuseIPDB', listType: 'abuse', source: 'AbuseIPDB' }], status: ds('AbuseIPDB', 'success', latency) }
+    return { abuseRecord, blacklistRecords: [{ listed: record?.abuseConfidenceScore > 0, listName: 'AbuseIPDB', listType: 'abuse', source: 'AbuseIPDB' }], status: ds('AbuseIPDB', 'success', latency) }
   } catch (e: any) {
     const latency = Date.now() - start
     return { abuseRecord: null, blacklistRecords: [], status: ds('AbuseIPDB', 'error', latency, e.message) }

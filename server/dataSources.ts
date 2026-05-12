@@ -369,7 +369,7 @@ async function callAbuseIPDB(ip: string): Promise<{
       source: 'AbuseIPDB',
     }
     const blacklistRecords: BlacklistRecord[] = [{
-      listed: record.totalReports > 0, listName: 'AbuseIPDB', listType: 'abuse', source: 'AbuseIPDB',
+      listed: record.abuseConfidenceScore > 0, listName: 'AbuseIPDB', listType: 'abuse', source: 'AbuseIPDB',
     }]
     return { abuseRecord, blacklistRecords, status: ds('AbuseIPDB', 'success', latency) }
   } catch (err: any) {

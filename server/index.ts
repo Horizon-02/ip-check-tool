@@ -211,8 +211,8 @@ app.post('/api/ip-check/score', rateLimitMiddleware, async (req, res) => {
     qualityResult.status,
   ]
 
-  // Consistency check is null server-side (requires browser data)
-  const consistency: ConsistencyCheck | null = null
+  // Accept browser-side consistency data from the frontend
+  const consistency: ConsistencyCheck | null = req.body?.consistency ?? null
 
   // Build the check result for the scoring engine
   const now = new Date().toISOString()

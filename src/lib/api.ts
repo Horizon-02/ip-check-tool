@@ -1,4 +1,4 @@
-import type { IpCheckResponse, IpCheckError } from '../types/ipCheck'
+import type { IpCheckResponse, IpCheckError, ConsistencyCheck } from '../types/ipCheck'
 
 const TIMEOUT_MS = 15000
 
@@ -82,11 +82,11 @@ export async function fetchCurrentIp(signal?: AbortSignal): Promise<IpCheckRespo
   return apiFetch<IpCheckResponse>('/api/ip-check/current', { signal })
 }
 
-export async function checkIpScore(ip?: string, signal?: AbortSignal): Promise<IpCheckResponse> {
+export async function checkIpScore(ip?: string, signal?: AbortSignal, consistency?: ConsistencyCheck): Promise<IpCheckResponse> {
   return apiFetch<IpCheckResponse>('/api/ip-check/score', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(ip ? { ip: ip.trim() } : {}),
+    body: JSON.stringify({ ...(ip ? { ip: ip.trim() } : {}), consistency: consistency ?? null }),
     signal,
   })
 }
