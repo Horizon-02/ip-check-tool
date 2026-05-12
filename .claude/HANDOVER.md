@@ -1,6 +1,6 @@
 # IP 检测工具 — 项目交接文档
 
-> 日期: 2026-05-12  
+> 日期: 2026-05-13  
 > 仓库: https://github.com/Horizon-02/ip-check-tool  
 > 线上: https://ip-check.leviatron02.com  
 > 作者: Claude Opus 4.7 + Horizon-02
@@ -150,7 +150,11 @@ ip-check-tool/
 
 ## 三、评分模型设计
 
-### 维度权重（满分 100）
+### 设计原则
+
+**IP 评分与浏览器环境检查分离**。参考 jason5ng32/MyIP (10.3k stars) — 主流 IP 工具箱不做评分，而是将各项检测独立展示。我们的评分聚焦于 **IP 本身质量**，浏览器环境检测（时区、WebRTC）作为信息参考单独展示，不计入 IP 评分。
+
+### 维度权重（IP 质量部分：满分 90 + 环境信息参考：10）
 
 ```
 ┌──────────────────────┬───────┬──────────────────────────────────────┐
@@ -163,30 +167,21 @@ ip-check-tool/
 │                      │       │ 多标签叠加额外-3                       │
 │ 4. 滥用与黑名单        │  25   │ AbuseIPDB >80%-15, >50%-10,          │
 │                      │       │ DNSBL 每条-5                          │
-│ 5. 环境一致性         │  10   │ 时区-4, 语言-3, DNS-3, WebRTC-3      │
-│                      │       │ 无浏览器数据时默认 5 分                │
-│ 6. 网络质量           │  10   │ 延迟>300ms-3, 丢包>5%-3,             │
+│ 5. 网络质量           │  10   │ 延迟>300ms-3, 丢包>5%-3,             │
 │                      │       │ IPv4缺失-2, IPv6 only-1               │
+│ 6. 浏览器环境（信息参考）│ 10   │ 不计入评分。展示时区/语言/WebRTC/   │
+│                      │       │ DNS 检测结果供用户参考               │
 └──────────────────────┴───────┴──────────────────────────────────────┘
 ```
 
-### 风险等级
-
-| 分数 | 等级 | 颜色 | 建议 |
-|------|------|------|------|
-| ≥85 | 优秀 (excellent) | 绿色 | 标准验证即可 |
-| ≥70 | 良好 (good) | 蓝色 | 建议标准验证 |
-| ≥50 | 谨慎 (caution) | 黄色 | 建议额外验证 |
-| ≥30 | 高风险 (high_risk) | 橙色 | 不建议直接信任 |
-| <30 | 不推荐 (not_recommended) | 红色 | 强烈建议阻止 |
-| >50% 数据源失败 | 不确定 (uncertain) | 灰色 | 数据不足，无法评估 |
-
 ### 关键设计决策
 
-1. **不确定性优先于虚假高分**：超过 50% 数据源失败时，不输出"干净"，强制标记为"不确定"
-2. **多源冲突展示而非合并**：VPN 标记 + 住宅网络类型时，两者都展示并标记冲突
-3. **扣分项完全可追溯**：每个扣分包含 `{ reason, reasonZh, source, field }`，可定位到具体数据源和字段
-4. **建议必须保守**：不承诺"某某 IP 一定可以访问 Claude"，只说风险等级和标准建议
+1. **IP 评分与浏览器环境分离**：时区/WebRTC 不匹配是用代理的正常表现，不应影响 IP 质量评分
+2. **不确定性优先于虚假高分**：超过 50% 数据源失败时，强制标记为"不确定"
+3. **多源冲突展示而非合并**：VPN 标记 + 住宅网络类型时，两者都展示并标记冲突
+4. **扣分项完全可追溯**：每个扣分包含 `{ reason, reasonZh, source, field }`
+5. **建议必须保守**：不承诺"某某 IP 一定可以访问 Claude"
+6. **WebRTC 只接受 srflx/prflx candidates**：参考 jason5ng32/MyIP 的 checkSTUNServer()，host candidates 仅显示本地 IP，不证明 STUN 工作
 
 ---
 
@@ -292,16 +287,34 @@ GET /api/ip-check/reputation?ip=8.8.8.8
 
 ## 六、环境一致性检测实现
 
-前端 `envConsistency.ts` 收集以下浏览器信号：
+前端 `envConsistency.ts` 收集以下浏览器信号；检测结果作为信息参考，**不计入 IP 评分**。
 
-| 检测项 | 方法 | 对比逻辑 |
-|--------|------|----------|
+### WebRTC 检测（参考 jason5ng32/MyIP）
+
+- 使用 Google + Cloudflare STUN 服务器
+- **只接受 srflx/prflx ICE candidates**（server-reflexive / peer-reflexive）
+- Host candidates 仅显示本地 IP，不能证明 STUN 工作，必须过滤
+- 5 秒超时
+- 支持 IPv4 + IPv6 地址提取
+
+### DNS 一致性检测
+
+- 通过 `cloudflare.com/cdn-cgi/trace` 获取 Cloudflare 视角的连接 IP
+- 与公网 IP 对比：一致 = 无 DNS 代理/泄漏
+
+### 时区/语言检测
+
+- 时区：`Intl.DateTimeFormat().resolvedOptions().timeZone` vs IP 地理位置时区
+- 语言：`navigator.languages` vs IP 国家预期语言
+
+### 检测项
+
+| 检测项 | 方法 | 说明 |
+|--------|------|------|
 | 时区 | `Intl.DateTimeFormat().resolvedOptions().timeZone` | vs IP 地理位置时区 |
 | 语言 | `navigator.languages` | vs IP 国家预期语言 |
-| WebRTC | `RTCPeerConnection` (仅创建 offer，不建立连接) | 本地 IP vs 公网 IP |
-| DNS | 端侧无法独立完成 | 标记为需要服务端数据 |
-
-收集后通过 `checkIpScore(ip, signal, consistency)` 传给后端参与评分。
+| WebRTC | `RTCPeerConnection` + STUN (srflx-only) | vs 公网 IP |
+| DNS | `cloudflare.com/cdn-cgi/trace` | 连接 IP vs 公网 IP |
 
 ---
 
@@ -372,19 +385,35 @@ npm run test:e2e   # 12 E2E 测试 (Playwright)
 ### Bug 2: 环境一致性永远 5 分
 
 - **现象**: 评分中"环境一致性"维度永远显示 -5，原因是"浏览器检查仅客户端可用"
-- **原因**: 前端收集了浏览器信号但 `checkIpScore()` 调用时没传给后端
+- **原因**: 前端收集了浏览器信号但后端 `scoreEngine.ts` 硬编码 `envScore=5`
 - **修复**: 
-  - `api.ts`: `checkIpScore()` 增加 `consistency` 参数
-  - `IpCheckPage.tsx`: 调用前先 `collectBrowserSignals()` 并传入
-  - `server/index.ts`: 接受 `req.body.consistency`
-  - `functions/api/ip-check/score.ts`: 接受 `body.consistency`
+  - 后端读取 `check.consistency` 计算环境一致性
+  - 前端 `handleResult` 异步完成后重新计算评分
+  - 最终决策：环境一致性改为信息参考，不计入 IP 评分
 
-### Bug 3: API 路由不匹配
+### Bug 3: WebRTC 接受 host candidates（2026-05-13）
 
-- **现象**: 前端调 `GET /api/ip-check?ip=x`，后端只有 `POST /api/ip-check/score`
-- **修复**: 
-  - `api.ts` `checkIpScore()`: 改为 `POST /api/ip-check/score` + JSON body
-  - `api.ts` `fetchReputation()`: 改为 `GET /api/ip-check/reputation?ip=x`
+- **现象**: WebRTC IP 可能显示本地 IP (192.168.x.x)，或接受非 STUN 验证的 IP
+- **原因**: 未过滤 ICE candidate 类型，host candidates 也接受
+- **修复**: 参考 jason5ng32/MyIP，只接受 `srflx`/`prflx` 类型 candidates
+- **影响范围**: `src/lib/envConsistency.ts`
+
+### Bug 4: 服务端黑名单扣分过滤器 broken（2026-05-13）
+
+- **现象**: 黑名单扣分不显示在 Abuse Risk 类别中
+- **原因**: `scoreEngine.ts` 用 `d.field?.startsWith?.('bl.')` 过滤，但实际 field 是 DNSBL 名称
+- **修复**: 改为按 `source` 字段过滤 (DNSBL/AbuseIPDB)
+
+### Bug 5: Connectivity Score 显示 /100 实为 /10（2026-05-13）
+
+- **现象**: 连接质量显示 "7/100"，但底层计算是 0-10 分制
+- **修复**: 前端显示改为 `/10`
+
+### Bug 6: 语言匹配假阴性（2026-05-13）
+
+- **现象**: 没有 IP 语言数据时，语言期望=实际但 still 显示不匹配
+- **原因**: `collectBrowserSignals` 在 `ipLanguages` 为空时 `languageMatch=false`
+- **修复**: 无 IP 语言数据时默认 `languageMatch=true`（不扣分）
 
 ---
 
@@ -437,9 +466,8 @@ npx wrangler pages deploy dist/ --project-name=ip-check --branch=main
 
 | 优先级 | 项目 | 说明 |
 |:------:|------|------|
-| 高 | `node:dns` DNSBL | 恢复 Cloudflare 环境下的 8 个 DNSBL（目前仅 4 个，受限于 DoH） |
-| 中 | WebRTC 异步结果回传 | 页面加载后 WebRTC 检测完成时，二次回传结果重新评分 |
-| 中 | 服务端 DNS 泄漏检测 | 对比客户端 DNS 和权威 DNS 解析结果 |
+| ~~高~~ | ~~WebRTC 异步结果回传~~ | ✅ 2026-05-13 已实现：srflx-only + 异步完成后重新评分 |
+| 中 | 服务端 DNS 泄漏检测 | 当前用 Cloudflare trace 做连接一致性检查；完整 DNS 泄漏检测需要权威 DNS 服务器 |
 | 中 | MaxMind GeoLite2 | 免费注册即可，增加第三个 Geo 数据源 |
 | 低 | 自定义评分权重 | 允许用户调整 6 维度权重 |
 | 低 | IP 对比模式 | 同时检测两个 IP 并对比 |
@@ -447,7 +475,20 @@ npx wrangler pages deploy dist/ --project-name=ip-check --branch=main
 
 ---
 
-## 十一、安全审计清单
+## 十一、变更记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-05-12 | 初始版本 |
+| 2026-05-13 | WebRTC 检测改为 srflx-only（参考 jason5ng32/MyIP） |
+| 2026-05-13 | 评分模型重构：IP 质量评分 + 浏览器环境信息参考分离 |
+| 2026-05-13 | DNS 一致性检测实现（cloudflare.com/cdn-cgi/trace） |
+| 2026-05-13 | 修复黑名单扣分过滤、Connectivity Score 单位、语言匹配假阴性 |
+| 2026-05-13 | 服务端 scoreEngine 重构：环境一致性不再硬编码，使用客户端数据 |
+
+---
+
+## 十二、安全审计清单
 
 - [x] API Key 不出现在前端源码中（读取自环境变量，后端代理请求）
 - [x] API Key 不出现在浏览器网络请求中（Playwright E2E 验证）
