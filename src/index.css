@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2a33 transparent;
+  }
+  *::-webkit-scrollbar { width: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: #2a2a33;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-surface-raised border border-ash-800 rounded-2xl;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  }
+
+  .score-ring {
+    transition: stroke-dashoffset 1s ease-out;
+  }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full inline-block;
+  }
+  .status-dot.success { @apply bg-accent-teal; }
+  .status-dot.error { @apply bg-accent-rose; }
+  .status-dot.timeout { @apply bg-accent-amber; }
+  .status-dot.not_configured { @apply bg-ash-500; }
+}
