@@ -485,6 +485,128 @@ npx wrangler pages deploy dist/ --project-name=ip-check --branch=main
 | 2026-05-13 | DNS 一致性检测实现（cloudflare.com/cdn-cgi/trace） |
 | 2026-05-13 | 修复黑名单扣分过滤、Connectivity Score 单位、语言匹配假阴性 |
 | 2026-05-13 | 服务端 scoreEngine 重构：环境一致性不再硬编码，使用客户端数据 |
+| 2026-05-18 | 全面代码审计 + 修复 + 评分模型收紧 + 安全加固（见第十三节） |
+
+---
+
+## 十三、2026-05-18 全面审计与修复
+
+### 审计方法
+
+1. **逐文件代码审查**：检查所有 7 个测试文件 + 14 个源码文件，寻找逻辑错误、安全漏洞、类型安全问题和边界条件
+2. **测试驱动验证**：运行 157 个单元测试，定位所有失败，追溯到根因
+3. **外部参考对比**：研究 jason5ng32/MyIP (10.3k stars) 等开源 IP 检测项目，对比检测方法、数据源选择、架构模式
+
+### 修复列表
+
+#### 1. 评分模型收紧（6 项参数调整）
+
+**为什么**：原模型对数据中心 IP（52/100 → "caution"）和 Tor 出口节点（32/100 → "high_risk"）评分过高。数据中心 IP 天然高风险，Tor 出口节点应直接归入 "not_recommended"。
+
+**改了什么**：
+- Tor 扣分：15 → 20（`src/lib/ipScore.ts` + `functions/_shared/scoreEngine.ts`）
+- Hosting 扣分：8 → 10（两处）
+- 网络类型 "unknown"：7 → 5（两处）
+- 环境一致性始终分：10 → 5（两处，信息参考不计入 IP 质量评分）
+- 延迟 >300ms 扣分：3 → 5（两处）
+- 延迟 >150ms 扣分：1 → 2（两处）
+
+**验证**：数据中心+滥用+黑名单 IP 现在评分 ≤45，Tor+多重滥用 IP 评分 ≤25。25 个评分测试全部通过。
+
+#### 2. Cloudflare Functions 缺少 IP 校验（安全漏洞）
+
+**为什么**：生产环境的 3 个 CF Functions 端点（current/score/reputation）仅检查 localhost，不拒绝私有 IP（192.168.x, 10.x, 127.x）、非法格式、SSRF payload。与 Express 后端的完整校验不一致。
+
+**改了什么**：
+- 新增 `functions/_shared/ipValidator.ts`（兼容 CF Workers 环境，无 `node:net` 依赖）
+- `functions/api/ip-check/score.ts`：添加 `isValidIp` + `isPublicIp` 校验
+- `functions/api/ip-check/current.ts`：添加校验
+- `functions/api/ip-check/reputation.ts`：添加校验
+
+**验证**：CF 端点现在与 Express 后端的校验逻辑一致。手动审查确认所有私有范围（RFC 1918、CGNAT、链路本地、组播、文档地址等）均被拒绝。
+
+#### 3. Express 端 IPv4-mapped IPv6 地址处理（安全漏洞）
+
+**为什么**：`req.ip` 在 Express trust proxy 启用时返回 `::ffff:192.168.1.1` 格式。`isPublicIp()` 不识别此格式，私有 IP 绕过检测被标记为公网 IP。
+
+**改了什么**：
+- `server/index.ts`：新增 `extractRealIp()` 函数，在验证前解包 `::ffff:x.x.x.x` 格式
+- `getClientIp()` 对所有来源 IP（X-Forwarded-For、req.ip）统一解包
+
+**验证**：`::ffff:192.168.1.1` 现在正确解包为 `192.168.1.1` 后被拒绝。
+
+#### 4. 客户端重评分覆盖服务器不确定性判定
+
+**为什么**：`handleResult` 调用 `calculateIpScore` 重新计算评分时，从 dataSources 重新计算 `isUncertain`。若客户端视角的数据源与服务器不同，服务器的不确定性判定会被丢失。
+
+**改了什么**：
+- `src/components/IpCheckPage.tsx`：保存服务器原始的 `isUncertain` + `uncertaintyReason`，客户端重评分后若服务器判为不确定但客户端未触发，则保留服务器的不确定性判定
+
+**验证**：不确定性测试通过（mock 3 个 failed dataSources → 超过 50% 失败 → 显示 uncertain badge）。
+
+#### 5. WebRTC/DNS 异步检查无错误处理
+
+**为什么**：`applyAsyncChecks` 中 `detectWebRtcIp()` 或 `detectDnsConsistency()` 若抛出异常，未捕获的 rejection 会导致未定义行为。
+
+**改了什么**：`applyAsyncChecks` 添加 try/catch（静默处理，WebRTC/DNS 是尽力而为的辅助检测）。
+
+#### 6. 冗余正则表达式
+
+**为什么**：`server/ipValidator.ts` 中 `sanitizeIp` 的正则 `/[^a-fa-f0-9.:]/g` 包含冗余的 `a-fa-f`（实际等价于 `[^a-f0-9.:]`）。
+
+**改了什么**：修正为 `/[^a-f0-9.:]/g`。
+
+#### 7. 测试修复（13 个失败 → 0 个失败）
+
+**envConsistency.test.ts（6 tests）**：测试期望值与当前代码行为不匹配（Bug 6 于 2026-05-13 修复后未更新测试）
+- `dnsNote` 预期值更新为当前代码的实际输出
+- 无 IP 数据时 `languageMatch`/`timezoneMatch` 默认为 true（避免假扣分）
+- WebRTC 测试改用 `vi.useFakeTimers()` 控制异步超时
+- srflx-only 候选者过滤器的测试用例更新为 srflx 类型
+
+**IpCheckPage.test.tsx（5 tests）**：mock 缺少 `detectDnsConsistency` + mock 数据与客户端重评分不一致
+- 新增 `detectDnsConsistency` mock
+- 更新 mockResponse 数据使其与 `calculateIpScore` 客户端评分引擎结果一致
+- 修复搜索重检查测试的异步时序（`fireEvent.change` → `waitFor(getByDisplayValue)`）
+- 展开 section 测试适配新 mock 数据
+
+**scoring.test.ts（2 tests）**：评分阈值与新收紧模型一致
+- 数据中心+滥用测试上限调整为 ≤45（原 <50）
+- Tor+滥用测试上限调整为 ≤25（原 <30），新增第 3 条黑名单以覆盖新扣分幅度
+
+### 安全审计补充
+
+基于审计新增的修复：
+- [x] CF Functions 端点具有与 Express 同等的 IP 校验（防 SSRF、内网探测）
+- [x] IPv4-mapped IPv6 地址在 IP 校验前正确解包
+- [x] WebRTC/DNS 异步检查异常不影响核心功能
+- [x] 客户端重评分不会丢失服务器不确定性判定
+- [x] sanitizeIp 正则无冗余/无效字符类
+
+### 外部参考：jason5ng32/MyIP 对比
+
+| 方面 | MyIP | 本工具 | 推荐 |
+|------|------|--------|------|
+| STUN 服务器 | 4 个 | 2 个 (Google+Cloudflare) | 当前足够 |
+| 数据源 | ip-api.com (无密钥) | ipapi.co + IPinfo + MaxMind | 本工具更全面 |
+| 评分模型 | 无（纯展示） | 6 维度 100 分制 | 本工具独有 |
+| 后端 | 无（纯前端） | Express + CF Functions | 本工具支持密钥 API |
+| DNSBL | 无 | 4-8 个提供商 | 本工具独有 |
+| 滥用检测 | 无 | AbuseIPDB | 本工具独有 |
+| IPv6 DNSBL | 不支持 | CF 不支持 / Server 不支持 | **需补充** |
+| 免费备用数据源 | ip-api.com | 无 | **推荐添加 ip-api.com** |
+
+### 推荐的后续改进（来自研究）
+
+| 优先级 | 项目 | 说明 |
+|:------:|------|------|
+| 高 | 添加 ip-api.com 作为无密钥备用数据源 | 45 req/min 免费，有代理检测，可弥补 ipapi.co 限流时的数据缺失 |
+| 高 | IPv6 DNSBL 支持 | 当前生产环境（CF）和开发环境（Express）均跳过 IPv6 DNSBL 查询 |
+| 中 | Tor 出口节点专用 DNSBL | `dnsbl.torproject.org` 反向查询可独立验证 Tor 状态 |
+| 中 | 反向 DNS 主机名分析 | PTR 记录中的 "broadband"/"dsl" vs "server"/"cloud" 可推断网络类型 |
+| 中 | 扩充 hosting/datacenter 关键词列表 | Contabo, M247, DDoS-Guard, BuyVM, FranTech, Psychz 等 |
+| 低 | iCloud Private Relay / Google MASQUE 识别 | 避免将合法隐私服务误标为代理 |
+| 低 | 多 DoH 提供商 DNS 泄漏检测 | 比单一 Cloudflare trace 更可靠 |
 
 ---
 

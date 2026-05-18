@@ -107,7 +107,7 @@ const NETWORK_TYPE_SCORES: Record<NetworkTypeInfo['type'], number> = {
   business: 13,
   mobile: 12,
   education: 10,
-  unknown: 7,
+  unknown: 5,
   hosting: 3,
   datacenter: 0,
 }
@@ -161,8 +161,8 @@ const PROXY_FLAG_MAP: Array<{
 }> = [
   { key: 'isVpn', label: 'VPN', labelZh: 'VPN', deduct: 10 },
   { key: 'isProxy', label: 'Proxy', labelZh: '代理', deduct: 10 },
-  { key: 'isTor', label: 'Tor', labelZh: 'Tor', deduct: 15 },
-  { key: 'isHosting', label: 'Hosting', labelZh: '托管', deduct: 8 },
+  { key: 'isTor', label: 'Tor', labelZh: 'Tor', deduct: 20 },
+  { key: 'isHosting', label: 'Hosting', labelZh: '托管', deduct: 10 },
   { key: 'isResidentialProxy', label: 'Residential Proxy', labelZh: '住宅代理', deduct: 12 },
   { key: 'isRelay', label: 'Relay', labelZh: '中继', deduct: 8 },
 ]
@@ -288,15 +288,14 @@ function calculateAbuseRisk(
  *
  * Timezone/WebRTC mismatches are EXPECTED when using a proxy and should NOT
  * penalize the IP score. These are shown as a separate informational panel.
+ *
+ * Always returns a neutral score — environment data is for user awareness.
  */
 function calculateEnvConsistency(
   _consistency: ConsistencyCheck | null | undefined,
   _deductions: ScoreDeduction[],
 ): number {
-  // Always return full marks — environment checks are informational only.
-  // The IP score focuses on IP-intrinsic qualities: geo, network type,
-  // proxy detection, abuse history, and network quality.
-  return 10
+  return 5
 }
 
 // ---------------------------------------------------------------------------
@@ -324,22 +323,22 @@ function calculateNetworkQualityScore(
   if (latency !== null && latency !== undefined) {
     if (latency > 300) {
       deductions.push({
-        amount: 3,
+        amount: 5,
         reason: `High latency: ${latency}ms`,
         reasonZh: `高延迟：${latency}毫秒`,
         source: 'networkQuality',
         field: 'latencyMs',
       })
-      score -= 3
+      score -= 5
     } else if (latency > 150) {
       deductions.push({
-        amount: 1,
+        amount: 2,
         reason: `Elevated latency: ${latency}ms`,
         reasonZh: `延迟较高：${latency}毫秒`,
         source: 'networkQuality',
         field: 'latencyMs',
       })
-      score -= 1
+      score -= 2
     }
   }
 
@@ -638,7 +637,7 @@ export function calculateIpScore(data: CheckResult): IpScoreResult {
     { label: 'Network Type', labelZh: '网络类型', maxScore: 15, score: networkTypeScore, deductions: networkDeductions },
     { label: 'Proxy Risk', labelZh: '代理风险', maxScore: 25, score: proxyRiskScore, deductions: proxyDeductions },
     { label: 'Abuse Risk', labelZh: '滥用风险', maxScore: 25, score: abuseRiskScore, deductions: abuseDeductions },
-    { label: 'Environment Consistency', labelZh: '环境一致性', maxScore: 10, score: envConsistencyScore, deductions: consistencyDeductions },
+    { label: 'Environment Consistency', labelZh: '环境一致性（信息参考）', maxScore: 5, score: envConsistencyScore, deductions: consistencyDeductions },
     { label: 'Network Quality', labelZh: '网络质量', maxScore: 10, score: networkQualityScore, deductions: qualityDeductions },
   ]
 

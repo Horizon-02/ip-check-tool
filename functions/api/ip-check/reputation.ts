@@ -1,4 +1,5 @@
 import { callIpapiCo, callAbuseIPDB, callDnsbl } from '../../_shared/dataSources'
+import { isValidIp, isPublicIp } from '../../_shared/ipValidator'
 import type { DataSourceInfo } from '../../_shared/types'
 
 export const onRequestGet: PagesFunction = async (ctx) => {
@@ -7,6 +8,12 @@ export const onRequestGet: PagesFunction = async (ctx) => {
 
   if (!ip) {
     return new Response(JSON.stringify({ error: 'Missing ip parameter', code: 'MISSING_IP', details: null }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  }
+  if (!isValidIp(ip)) {
+    return new Response(JSON.stringify({ error: 'Invalid IP address provided.', code: 'INVALID_IP', details: `"${ip}" is not a valid IPv4 or IPv6 address.` }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  }
+  if (!isPublicIp(ip)) {
+    return new Response(JSON.stringify({ error: 'Only public IP addresses can be checked.', code: 'PRIVATE_IP', details: `"${ip}" is a private, reserved, or non-routable address.` }), { status: 400, headers: { 'Content-Type': 'application/json' } })
   }
 
   const [ipapi, abuse, dnsbl] = await Promise.all([callIpapiCo(ip), callAbuseIPDB(ip), callDnsbl(ip)])

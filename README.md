@@ -176,10 +176,12 @@ The IP reputation score is calculated across 6 dimensions, totaling 100 points:
 |-----------|-----------|-------------|
 | Geo Trust | 15 | Geolocation data completeness and ASN legitimacy |
 | Network Type | 15 | Residential/business networks score higher than datacenter/hosting |
-| Proxy Risk | 25 | VPN, proxy, Tor, and relay detection |
-| Abuse Risk | 25 | AbuseIPDB confidence score and blacklist presence |
-| Environment Consistency | 10 | Browser timezone/language/DNS/WebRTC alignment |
-| Network Quality | 10 | Latency, packet loss, IPv4/IPv6 support |
+| Proxy Risk | 25 | VPN, proxy, Tor (20pt deduction), and relay detection |
+| Abuse Risk | 25 | AbuseIPDB confidence score and blacklist presence (5pt per listing) |
+| Environment Consistency | 5 | Browser timezone/language/DNS/WebRTC — informational reference only |
+| Network Quality | 10 | Latency (>300ms: -5, >150ms: -2), packet loss, IPv4/IPv6 support |
+
+Note: Environment consistency is **not penalized** in the IP score — mismatches are EXPECTED when using proxies and are shown as informational data only.
 
 ### Risk Levels
 

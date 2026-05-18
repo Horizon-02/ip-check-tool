@@ -1,8 +1,13 @@
 import { callIpapiCo, callIpinfo } from '../../_shared/dataSources'
+import { isValidIp, isPublicIp } from '../../_shared/ipValidator'
 import type { DataSourceInfo } from '../../_shared/types'
 
 export const onRequestGet: PagesFunction = async (ctx) => {
   const ip = ctx.request.headers.get('CF-Connecting-IP') || '127.0.0.1'
+
+  if (!isValidIp(ip) || !isPublicIp(ip)) {
+    return new Response(JSON.stringify({ error: 'Unable to determine a valid public client IP address.', code: 'INVALID_IP', details: null }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  }
 
   const [ipapi, ipinfo] = await Promise.all([callIpapiCo(ip), callIpinfo(ip)])
 

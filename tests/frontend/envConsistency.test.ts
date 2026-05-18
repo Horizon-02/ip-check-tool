@@ -35,7 +35,8 @@ describe('detectWebRtcIp', () => {
   })
 
   it('returns null when no ICE candidate fires within timeout', async () => {
-    // A mock that never fires onicecandidate
+    vi.useFakeTimers()
+    // A mock that never fires onicecandidate — timeout should trigger
     const closeFn = vi.fn()
     globalThis.RTCPeerConnection = vi.fn().mockImplementation(() => ({
       createDataChannel: vi.fn(),
@@ -45,13 +46,16 @@ describe('detectWebRtcIp', () => {
       onicecandidate: null as any,
     })) as unknown as typeof RTCPeerConnection
 
-    const result = await detectWebRtcIp()
+    const promise = detectWebRtcIp()
+    await vi.runAllTimersAsync()
+    const result = await promise
+    vi.useRealTimers()
     expect(result).toBeNull()
-    // The connection should have been closed
     expect(closeFn).toHaveBeenCalled()
   })
 
-  it('returns the local IP when an ICE candidate provides one', async () => {
+  it('returns srflx candidate IP (filters out host candidates)', async () => {
+    vi.useFakeTimers()
     let onIceCallback: ((event: any) => void) | null = null
     const closeFn = vi.fn()
 
@@ -61,16 +65,14 @@ describe('detectWebRtcIp', () => {
       setLocalDescription: vi.fn().mockResolvedValue(undefined),
       close: closeFn,
       set onicecandidate(cb: ((event: any) => void) | null) {
-        // Fire the callback asynchronously with a real-looking candidate
+        // Fire synchronously so it fires before the timeout
         if (cb) {
-          setTimeout(() => {
-            cb({
-              candidate: {
-                candidate:
-                  'candidate:1 1 UDP 2122252543 192.168.1.42 54321 typ host',
-              },
-            })
-          }, 5)
+          cb({
+            candidate: {
+              candidate:
+                'candidate:1 1 UDP 2122252543 8.8.8.8 54321 typ srflx raddr 192.168.1.42 rport 54321',
+            },
+          })
         }
         onIceCallback = cb
       },
@@ -79,8 +81,10 @@ describe('detectWebRtcIp', () => {
       },
     })) as unknown as typeof RTCPeerConnection
 
-    const result = await detectWebRtcIp()
-    expect(result).toBe('192.168.1.42')
+    const promise = detectWebRtcIp()
+    const result = await promise
+    vi.useRealTimers()
+    expect(result).toBe('8.8.8.8')
     expect(closeFn).toHaveBeenCalled()
   })
 })
@@ -113,8 +117,8 @@ describe('collectBrowserSignals', () => {
   it('returns timezone info from the browser', () => {
     const signals = collectBrowserSignals()
     expect(signals.timezoneActual).toBe('America/New_York')
-    // Without ipTimezone, timezoneMatch should be false
-    expect(signals.timezoneMatch).toBe(false)
+    // Without ipTimezone, default to true to avoid false penalization
+    expect(signals.timezoneMatch).toBe(true)
     // timezoneExpected should fall back to browser timezone
     expect(signals.timezoneExpected).toBe('America/New_York')
   })
@@ -122,8 +126,8 @@ describe('collectBrowserSignals', () => {
   it('returns language info from the browser', () => {
     const signals = collectBrowserSignals()
     expect(signals.languageActual).toEqual(['en-US', 'en', 'zh-CN'])
-    // Without ipLanguages, languageMatch should be false
-    expect(signals.languageMatch).toBe(false)
+    // Without ipLanguages, default to true to avoid false penalization
+    expect(signals.languageMatch).toBe(true)
     // languageExpected should fall back to browser languages
     expect(signals.languageExpected).toEqual(['en-US', 'en', 'zh-CN'])
   })
@@ -141,11 +145,9 @@ describe('collectBrowserSignals', () => {
   it('has expected default values for network-related fields', () => {
     const signals = collectBrowserSignals()
     expect(signals.dnsMatch).toBe(false)
-    expect(signals.dnsNote).toBe('DNS comparison requires server-side resolver data')
+    expect(signals.dnsNote).toBe('DNS check pending; call detectDnsConsistency()')
     expect(signals.webrtcMatch).toBe(false)
-    expect(signals.webrtcNote).toBe(
-      'WebRTC check pending; call detectWebRtcIp() and compare with IP address',
-    )
+    expect(signals.webrtcNote).toBe('WebRTC check pending; call detectWebRtcIp()')
   })
 
   describe('timezoneMatch', () => {
@@ -188,9 +190,9 @@ describe('collectBrowserSignals', () => {
       expect(signals.languageMatch).toBe(true)
     })
 
-    it('returns false when given no expected languages (ipLanguages undefined)', () => {
+    it('returns true when given no expected languages (ipLanguages undefined) — avoids false penalization', () => {
       const signals = collectBrowserSignals()
-      expect(signals.languageMatch).toBe(false)
+      expect(signals.languageMatch).toBe(true)
     })
   })
 })

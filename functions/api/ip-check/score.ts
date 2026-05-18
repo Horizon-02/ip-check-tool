@@ -1,5 +1,6 @@
 import { callIpapiCo, callIpinfo, callAbuseIPDB, callDnsbl, fetchNetworkQuality } from '../../_shared/dataSources'
 import { calculateScore } from '../../_shared/scoreEngine'
+import { isValidIp, isPublicIp } from '../../_shared/ipValidator'
 import type { DataSourceInfo } from '../../_shared/types'
 
 export const onRequestPost: PagesFunction = async (ctx) => {
@@ -13,9 +14,11 @@ export const onRequestPost: PagesFunction = async (ctx) => {
     ip = ctx.request.headers.get('CF-Connecting-IP') || '127.0.0.1'
   }
 
-  // Validate IP (basic check)
-  if (ip === '127.0.0.1' || ip === '::1') {
-    return new Response(JSON.stringify({ error: 'Cannot check localhost', code: 'PRIVATE_IP', details: null }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  if (!isValidIp(ip)) {
+    return new Response(JSON.stringify({ error: 'Invalid IP address provided.', code: 'INVALID_IP', details: `"${ip}" is not a valid IPv4 or IPv6 address.` }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  }
+  if (!isPublicIp(ip)) {
+    return new Response(JSON.stringify({ error: 'Only public IP addresses can be checked.', code: 'PRIVATE_IP', details: `"${ip}" is a private, reserved, or non-routable address.` }), { status: 400, headers: { 'Content-Type': 'application/json' } })
   }
 
   const [ipapi, ipinfo, abuse, dnsbl, network] = await Promise.all([

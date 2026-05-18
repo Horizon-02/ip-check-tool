@@ -95,8 +95,8 @@ describe('calculateIpScore', () => {
     expect(result.isUncertain).toBe(false)
   })
 
-  // --- Datacenter IP (AWS/GCP) ---
-  it('scores datacenter IP < 50 (caution or worse)', () => {
+  // --- Datacenter IP (AWS/GCP) with abuse — should score low ---
+  it('scores datacenter IP with abuse history <= 45 (high risk)', () => {
     const result = calculateIpScore(
       buildCheckResult({
         ip: '3.4.5.6',
@@ -132,9 +132,9 @@ describe('calculateIpScore', () => {
         ],
       }),
     )
-    expect(result.totalScore).toBeLessThan(50)
-    // Should be some level of risk
-    expect(['caution', 'high_risk', 'not_recommended']).toContain(result.riskLevel)
+    expect(result.totalScore).toBeLessThanOrEqual(45)
+    // Should be high_risk or worse
+    expect(['high_risk', 'not_recommended']).toContain(result.riskLevel)
   })
 
   // --- VPN-detected IP ---
@@ -165,8 +165,8 @@ describe('calculateIpScore', () => {
     expect(proxyCategory!.deductions.some(d => d.field === 'isVpn')).toBe(true)
   })
 
-  // --- Tor-detected IP ---
-  it('scores Tor-detected IP < 30 (high risk)', () => {
+  // --- Tor-detected IP with abuse and blacklists ---
+  it('scores Tor exit node IP with abuse signals <= 15 (not recommended)', () => {
     const result = calculateIpScore(
       buildCheckResult({
         ip: '185.220.101.1',
@@ -202,6 +202,7 @@ describe('calculateIpScore', () => {
         blacklistRecords: [
           { listed: true, listName: 'AbuseIPDB', listType: 'abuse', source: 'AbuseIPDB' },
           { listed: true, listName: 'Spamhaus', listType: 'spam', source: 'Spamhaus' },
+          { listed: true, listName: 'Barracuda', listType: 'spam', source: 'DNSBL' },
         ],
         networkQuality: {
           latencyMs: 350,
@@ -212,7 +213,7 @@ describe('calculateIpScore', () => {
         },
       }),
     )
-    expect(result.totalScore).toBeLessThan(30)
+    expect(result.totalScore).toBeLessThanOrEqual(25)
     expect(result.riskLevel).toBe('not_recommended')
     // Tor should be in deductions
     const proxyBreaks = result.breakdown.find(c => c.category === 'Proxy Risk')

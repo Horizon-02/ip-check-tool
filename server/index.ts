@@ -61,18 +61,33 @@ const scoreCache = createCache<any>(30_000)      // 30s TTL
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Extract the real client IP, respecting X-Forwarded-For and Express trust proxy.
+ *
+ * Handles IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) from req.ip by extracting
+ * the embedded IPv4 address before validation.
+ */
+function extractRealIp(rawIp: string | undefined): string | null {
+  if (!rawIp) return null
+  // Unwrap IPv4-mapped IPv6 (::ffff:192.168.1.1 → 192.168.1.1)
+  const v4map = rawIp.match(/^::ffff:(.+)$/i)
+  if (v4map) return v4map[1]?.trim() ?? null
+  return rawIp.trim()
+}
+
 function getClientIp(req: express.Request): string {
   const forwarded = req.headers['x-forwarded-for']
   if (typeof forwarded === 'string') {
-    const first = forwarded.split(',')[0].trim()
-    if (isValidIp(first)) return first
+    const first = extractRealIp(forwarded.split(',')[0])
+    if (first && isValidIp(first)) return first
   }
   if (Array.isArray(forwarded) && forwarded.length > 0) {
-    const first = forwarded[0].split(',')[0].trim()
-    if (isValidIp(first)) return first
+    const first = extractRealIp(forwarded[0].split(',')[0])
+    if (first && isValidIp(first)) return first
   }
   // Fall back to req.ip (trust proxy must be enabled)
-  if (req.ip && isValidIp(req.ip)) return req.ip
+  const extracted = extractRealIp(req.ip)
+  if (extracted && isValidIp(extracted)) return extracted
   return '127.0.0.1'
 }
 

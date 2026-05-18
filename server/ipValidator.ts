@@ -92,6 +92,6 @@ export function sanitizeIp(input: string): string {
   // Lowercase (IPv6 is case-insensitive)
   sanitized = sanitized.toLowerCase()
   // Strip any character that is not valid in an IP address
-  sanitized = sanitized.replace(/[^a-fa-f0-9.:]/g, '')
+  sanitized = sanitized.replace(/[^a-f0-9.:]/g, '')
   return sanitized
 }

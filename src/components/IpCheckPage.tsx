@@ -953,15 +953,25 @@ export function IpCheckPage() {
 
     // Initial consistency update + re-score with client-side scoring engine.
     // WebRTC and DNS checks run async and will update + re-score again on completion.
+    // Preserve server-computed uncertainty when data sources failed.
+    const serverIsUncertain = result.score.isUncertain
+    const serverUncertaintyReason = result.score.uncertaintyReason
     setData((prev) => {
       if (!prev) return prev
       const initialConsistency = { ...browserSignals }
       const clientScore = calculateIpScore({ ...prev, consistency: initialConsistency })
+      // Preserve server-computed uncertainty when more than 50% of data sources failed
+      if (serverIsUncertain && !clientScore.isUncertain) {
+        clientScore.isUncertain = true
+        clientScore.uncertaintyReason = serverUncertaintyReason ?? clientScore.uncertaintyReason
+        clientScore.riskLevel = 'uncertain'
+      }
       return { ...prev, consistency: initialConsistency, score: clientScore }
     })
 
     // Run WebRTC and DNS checks in parallel, then re-score with full results
     const applyAsyncChecks = async () => {
+      try {
       const [webrtcIp, dnsResult] = await Promise.all([
         detectWebRtcIp(),
         detectDnsConsistency(result.ip),
@@ -982,8 +992,15 @@ export function IpCheckPage() {
           dnsNote: dnsResult.note,
         }
         const clientScore = calculateIpScore({ ...prev, consistency: updatedConsistency })
+        // Preserve server-computed uncertainty
+        if (serverIsUncertain && !clientScore.isUncertain) {
+          clientScore.isUncertain = true
+          clientScore.uncertaintyReason = serverUncertaintyReason ?? clientScore.uncertaintyReason
+          clientScore.riskLevel = 'uncertain'
+        }
         return { ...prev, consistency: updatedConsistency, score: clientScore }
       })
+      } catch { /* WebRTC/DNS checks are best-effort; ignore failures */ }
     }
     applyAsyncChecks()
 

@@ -8,16 +8,16 @@ export function calculateScore(check: any): any {
   if (!check.geo?.country) deductions.push({ amount: 15, reason: 'Missing geo data', reasonZh: '缺少地理位置数据', source: 'geo', field: 'geo' })
 
   // Network type (0-15)
-  const ntMap: Record<string, number> = { residential: 15, business: 13, mobile: 12, education: 10, unknown: 7, hosting: 3, datacenter: 0 }
+  const ntMap: Record<string, number> = { residential: 15, business: 13, mobile: 12, education: 10, unknown: 5, hosting: 3, datacenter: 0 }
   const ntScore = ntMap[check.networkType?.type ?? 'unknown'] ?? 7
 
   // Proxy risk (0-25)
   let proxyScore = 25
   const pd = check.proxyDetection
-  if (pd?.isTor) { proxyScore -= 15; deductions.push({ amount: 15, reason: 'Tor detected', reasonZh: '检测到Tor', source: pd.source, field: 'isTor' }) }
+  if (pd?.isTor) { proxyScore -= 20; deductions.push({ amount: 20, reason: 'Tor detected', reasonZh: '检测到Tor', source: pd.source, field: 'isTor' }) }
   if (pd?.isVpn) { proxyScore -= 10; deductions.push({ amount: 10, reason: 'VPN detected', reasonZh: '检测到VPN', source: pd.source, field: 'isVpn' }) }
   if (pd?.isProxy) { proxyScore -= 10; deductions.push({ amount: 10, reason: 'Proxy detected', reasonZh: '检测到代理', source: pd.source, field: 'isProxy' }) }
-  if (pd?.isHosting) { proxyScore -= 8; deductions.push({ amount: 8, reason: 'Hosting provider', reasonZh: '托管服务商', source: pd.source, field: 'isHosting' }) }
+  if (pd?.isHosting) { proxyScore -= 10; deductions.push({ amount: 10, reason: 'Hosting provider', reasonZh: '托管服务商', source: pd.source, field: 'isHosting' }) }
   if (pd?.isRelay) { proxyScore -= 8; deductions.push({ amount: 8, reason: 'Relay detected', reasonZh: '检测到中继', source: pd.source, field: 'isRelay' }) }
   if (pd?.isResidentialProxy) { proxyScore -= 12; deductions.push({ amount: 12, reason: 'Residential proxy', reasonZh: '住宅代理', source: pd.source, field: 'isResidentialProxy' }) }
   proxyScore = Math.max(0, proxyScore)
@@ -36,12 +36,12 @@ export function calculateScore(check: any): any {
   // Environment consistency is informational only.
   // Browser-level checks (timezone, WebRTC, DNS) reflect HOW the user connects,
   // not the IP's intrinsic quality. Shown separately, not scored.
-  const envScore = 10
+  const envScore = 5
 
   // Network quality (0-10)
   let nqScore = 10
   if (check.networkQuality?.latencyMs) {
-    if (check.networkQuality.latencyMs > 300) { nqScore -= 3 } else if (check.networkQuality.latencyMs > 150) { nqScore -= 1 }
+    if (check.networkQuality.latencyMs > 300) { nqScore -= 5 } else if (check.networkQuality.latencyMs > 150) { nqScore -= 2 }
   }
   nqScore = Math.max(0, nqScore)
 
@@ -76,7 +76,7 @@ export function calculateScore(check: any): any {
       { category: 'Network Type', categoryZh: '网络类型', maxScore: 15, score: ntScore, deductions: [] },
       { category: 'Proxy Risk', categoryZh: '代理风险', maxScore: 25, score: proxyScore, deductions: deductions.filter(d => ['isVpn', 'isProxy', 'isTor', 'isHosting', 'isRelay', 'isResidentialProxy'].includes(d.field)) },
       { category: 'Abuse Risk', categoryZh: '滥用风险', maxScore: 25, score: abuseScore, deductions: deductions.filter(d => d.field === 'confidenceScore' || (d.source === 'DNSBL' || d.source === 'AbuseIPDB')) },
-      { category: 'Environment Consistency', categoryZh: '环境一致性（信息参考）', maxScore: 10, score: 10, deductions: [] },
+      { category: 'Environment Consistency', categoryZh: '环境一致性（信息参考）', maxScore: 5, score: 5, deductions: [] },
       { category: 'Network Quality', categoryZh: '网络质量', maxScore: 10, score: nqScore, deductions: [] },
     ],
     keyFindings: [`Score: ${total}/100`, riskLevel],
