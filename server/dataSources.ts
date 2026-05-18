@@ -72,6 +72,11 @@ const HOSTING_KEYWORDS = [
   'oracle cloud', 'oci', 'ibm cloud', 'softlayer', 'rackspace', 'akamai',
   'cloudflare', 'fastly', 'cloudfront', 'alibaba cloud', 'tencent cloud',
   'vscale', 'timeweb', 'firstvds',
+  // Additional providers from research
+  'contabo', 'm247', 'ddos-guard', 'buyvm', 'frantech', 'psychz', 'sharktech',
+  'buyvm', 'serverhosh', 'dedipath', 'colocrossing', 'phoenixnap',
+  'leaseweb', 'equinix metal', 'packet', 'choopa', 'constant',
+  'servarica', 'nexril', 'vidahost', 'greencloud', 'liteserver',
 ]
 
 const DATACENTER_KEYWORDS = [
@@ -394,6 +399,7 @@ const DNSBL_PROVIDERS: Array<{ name: string; zone: string; type: string }> = [
   { name: 'UCEPROTECT L1', zone: 'dnsbl-1.uceprotect.net', type: 'spam' },
   { name: 'UCEPROTECT L2', zone: 'dnsbl-2.uceprotect.net', type: 'spam' },
   { name: 'UCEPROTECT L3', zone: 'dnsbl-3.uceprotect.net', type: 'spam' },
+  { name: 'Tor Exit Node', zone: 'dnsel.torproject.org', type: 'tor' },
 ]
 
 function reverseIpForDnsbl(ip: string): string {
@@ -455,7 +461,74 @@ async function callDnsbl(ip: string): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// 7. Cloudflare Trace — free, no key needed, simple IP detection
+// 7. ip-api.com — free tier, no key required, 45 req/min
+//    Geo + ASN + ISP + proxy/hosting detection
+//    Used as fallback when ipapi.co fails or is rate-limited.
+//    Docs: https://ip-api.com/docs/api:json
+// ---------------------------------------------------------------------------
+
+interface IpApiComResponse {
+  status?: string; message?: string
+  country?: string; countryCode?: string; region?: string; city?: string
+  lat?: number; lon?: number; timezone?: string
+  as?: string; org?: string; isp?: string
+  proxy?: boolean; hosting?: boolean; mobile?: boolean
+  query?: string
+}
+
+async function callIpApiCom(ip: string): Promise<{
+  geo: GeoLocation; asn: AsnInfo; networkType: NetworkTypeInfo
+  proxyDetection: ProxyDetection; status: DataSourceInfo
+}> {
+  const start = Date.now()
+  try {
+    const fields = 'status,message,country,countryCode,region,city,lat,lon,timezone,as,org,isp,proxy,hosting,mobile,query'
+    const data = await fetchWithTimeout<IpApiComResponse>(
+      `http://ip-api.com/json/${ip}?fields=${fields}`,
+    )
+    const latency = Date.now() - start
+    if (data.status !== 'success') {
+      return {
+        geo: emptyGeo(), asn: emptyAsn(),
+        networkType: { type: 'unknown', confidence: 0, source: 'ip-api.com' },
+        proxyDetection: emptyProxyDetection(),
+        status: ds('ip-api.com', 'error', latency, data.message ?? 'API error'),
+      }
+    }
+    const asnMatch = data.as?.match(/^(AS\d+)\s+(.+)/)
+    const geo: GeoLocation = {
+      country: data.country ?? '', countryCode: data.countryCode ?? '',
+      region: data.region ?? '', city: data.city ?? '',
+      latitude: data.lat ?? null, longitude: data.lon ?? null,
+      timezone: data.timezone ?? '',
+    }
+    const asn: AsnInfo = {
+      asn: asnMatch?.[1] ?? data.as ?? '',
+      asnOrg: asnMatch?.[2] ?? data.org ?? '',
+      isp: data.isp ?? '', org: data.org ?? null,
+    }
+    const networkType = inferNetworkTypeFromOrg(data.org)
+    if (data.hosting) { networkType.type = 'hosting'; networkType.confidence = 60 }
+    else if (data.mobile) { networkType.type = 'mobile'; networkType.confidence = 60 }
+
+    const proxyDetection: ProxyDetection = {
+      isVpn: false, isProxy: data.proxy ?? false, isTor: false, isRelay: false,
+      isHosting: data.hosting ?? false, isResidentialProxy: false,
+      confidence: data.proxy || data.hosting ? 60 : 0, source: 'ip-api.com',
+      details: `Proxy:${data.proxy} Hosting:${data.hosting} Mobile:${data.mobile}`,
+    }
+    return { geo, asn, networkType, proxyDetection, status: ds('ip-api.com', 'success', latency) }
+  } catch (err: any) {
+    const latency = Date.now() - start
+    if (err.name === 'AbortError') {
+      return { geo: emptyGeo(), asn: emptyAsn(), networkType: { type: 'unknown', confidence: 0, source: 'ip-api.com' }, proxyDetection: emptyProxyDetection(), status: ds('ip-api.com', 'timeout', latency) }
+    }
+    return { geo: emptyGeo(), asn: emptyAsn(), networkType: { type: 'unknown', confidence: 0, source: 'ip-api.com' }, proxyDetection: emptyProxyDetection(), status: ds('ip-api.com', 'error', latency, err.message) }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Cloudflare Trace — free, no key needed, simple IP detection
 //    URL: https://cloudflare.com/cdn-cgi/trace
 // ---------------------------------------------------------------------------
 
@@ -487,13 +560,14 @@ async function callCloudflareTrace(): Promise<{
 export async function fetchIpGeoData(ip: string): Promise<{
   geo: GeoLocation; asn: AsnInfo; networkType: NetworkTypeInfo; status: DataSourceInfo
 }> {
-  const [ipapi, ipinfo, maxmind] = await Promise.all([
+  const [ipapi, ipinfo, maxmind, ipapicom] = await Promise.all([
     callIpapiCo(ip),
     callIpinfo(ip),
     callMaxMind(ip),
+    callIpApiCom(ip),
   ])
 
-  const sources = [maxmind, ipinfo, ipapi].filter(Boolean) as NonNullable<typeof ipapi>[]
+  const sources = [maxmind, ipinfo, ipapi, ipapicom].filter(Boolean) as NonNullable<typeof ipapi>[]
 
   let geo = emptyGeo()
   let asn = emptyAsn()
@@ -526,14 +600,15 @@ export async function fetchIpGeoData(ip: string): Promise<{
 export async function fetchProxyDetection(ip: string): Promise<{
   proxyDetection: ProxyDetection; status: DataSourceInfo
 }> {
-  const [ipapi, ipinfo, maxmind] = await Promise.all([
+  const [ipapi, ipinfo, maxmind, ipapicom] = await Promise.all([
     callIpapiCo(ip),
     callIpinfo(ip),
     callMaxMind(ip),
+    callIpApiCom(ip),
   ])
 
   const allResults = [ipapi.proxyDetection, ...(
-    [ipinfo, maxmind].filter(Boolean) as NonNullable<typeof ipinfo>[]
+    [ipinfo, maxmind, ipapicom].filter(Boolean) as NonNullable<typeof ipinfo>[]
   ).map(r => r.proxyDetection)]
 
   const aggregated: ProxyDetection = {

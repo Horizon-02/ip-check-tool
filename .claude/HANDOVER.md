@@ -486,6 +486,7 @@ npx wrangler pages deploy dist/ --project-name=ip-check --branch=main
 | 2026-05-13 | 修复黑名单扣分过滤、Connectivity Score 单位、语言匹配假阴性 |
 | 2026-05-13 | 服务端 scoreEngine 重构：环境一致性不再硬编码，使用客户端数据 |
 | 2026-05-18 | 全面代码审计 + 修复 + 评分模型收紧 + 安全加固（见第十三节） |
+| 2026-05-18 | 新增 ip-api.com 备用数据源 + Tor DNSBL + IPv6 DNSBL (CF) + 扩充关键词（见第十三节底部） |
 
 ---
 
@@ -598,15 +599,15 @@ npx wrangler pages deploy dist/ --project-name=ip-check --branch=main
 
 ### 推荐的后续改进（来自研究）
 
-| 优先级 | 项目 | 说明 |
-|:------:|------|------|
-| 高 | 添加 ip-api.com 作为无密钥备用数据源 | 45 req/min 免费，有代理检测，可弥补 ipapi.co 限流时的数据缺失 |
-| 高 | IPv6 DNSBL 支持 | 当前生产环境（CF）和开发环境（Express）均跳过 IPv6 DNSBL 查询 |
-| 中 | Tor 出口节点专用 DNSBL | `dnsbl.torproject.org` 反向查询可独立验证 Tor 状态 |
-| 中 | 反向 DNS 主机名分析 | PTR 记录中的 "broadband"/"dsl" vs "server"/"cloud" 可推断网络类型 |
-| 中 | 扩充 hosting/datacenter 关键词列表 | Contabo, M247, DDoS-Guard, BuyVM, FranTech, Psychz 等 |
-| 低 | iCloud Private Relay / Google MASQUE 识别 | 避免将合法隐私服务误标为代理 |
-| 低 | 多 DoH 提供商 DNS 泄漏检测 | 比单一 Cloudflare trace 更可靠 |
+| 优先级 | 项目 | 说明 | 状态 |
+|:------:|------|------|:----:|
+| ~~高~~ | ~~添加 ip-api.com 作为无密钥备用数据源~~ | 45 req/min 免费，有代理检测，可弥补 ipapi.co 限流时的数据缺失 | ✅ 2026-05-18 |
+| ~~高~~ | ~~IPv6 DNSBL 支持~~ | CF Functions 现已支持 IPv6 DNSBL（Google DoH + AAAA 查询） | ✅ 2026-05-18 |
+| ~~中~~ | ~~Tor 出口节点专用 DNSBL~~ | `dnsel.torproject.org` 添加到 server (9个) 和 CF (6个) DNSBL 列表 | ✅ 2026-05-18 |
+| ~~中~~ | ~~扩充 hosting/datacenter 关键词列表~~ | 新增 Contabo, M247, DDoS-Guard, BuyVM, FranTech, Psychz, SharkTech 等 18 个 | ✅ 2026-05-18 |
+| 中 | 反向 DNS 主机名分析 | PTR 记录中的 "broadband"/"dsl" vs "server"/"cloud" 可推断网络类型 | |
+| 低 | iCloud Private Relay / Google MASQUE 识别 | 避免将合法隐私服务误标为代理 | |
+| 低 | 多 DoH 提供商 DNS 泄漏检测 | 比单一 Cloudflare trace 更可靠 | |
 
 ---
 

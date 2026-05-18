@@ -95,18 +95,61 @@ const DNSBL_LIST = [
   { name: 'Barracuda', zone: 'b.barracudacentral.org', type: 'spam' },
   { name: 'SpamCop', zone: 'bl.spamcop.net', type: 'spam' },
   { name: 'Sorbs', zone: 'dnsbl.sorbs.net', type: 'spam' },
+  { name: 'SURBL (multi)', zone: 'multi.surbl.org', type: 'phishing' },
+  { name: 'Tor Exit Node', zone: 'dnsel.torproject.org', type: 'tor' },
 ]
 
-function reverseIp(ip: string): string { return ip.split('.').reverse().join('.') }
+function reverseIp4(ip: string): string { return ip.split('.').reverse().join('.') }
+
+function reverseIp6(ip: string): string {
+  // Expand :: to full form, then reverse nibbles
+  try {
+    const parts = ip.split(':')
+    const expanded: string[] = []
+    for (const part of parts) {
+      if (part === '') {
+        // :: compression — fill to 8 groups
+        const fill = 8 - parts.filter(p => p !== '').length
+        for (let i = 0; i <= fill; i++) expanded.push('0000')
+      } else {
+        expanded.push(part.padStart(4, '0'))
+      }
+    }
+    return expanded.join('').split('').reverse().join('.')
+  } catch {
+    return ''
+  }
+}
 
 export async function callDnsbl(ip: string): Promise<{
   blacklistRecords: BlacklistRecord[]; status: DataSourceInfo
 }> {
-  if (ip.includes(':')) return { blacklistRecords: [], status: ds('DNSBL', 'success', 0) }
-  const reversed = reverseIp(ip)
   const start = Date.now()
   const results: BlacklistRecord[] = []
 
+  if (ip.includes(':')) {
+    // IPv6 DNSBL via DoH
+    const reversed = reverseIp6(ip)
+    if (!reversed || reversed.length < 60) {
+      results.push(...DNSBL_LIST.map(p => ({ listed: false, listName: p.name, listType: p.type, source: 'DNSBL' })))
+      return { blacklistRecords: results, status: ds('DNSBL', 'not_configured', 0, 'IPv6 reverse failed') }
+    }
+    const lookups = DNSBL_LIST.map(async (provider) => {
+      const url = `https://dns.google/resolve?name=${reversed}.${provider.zone}&type=AAAA`
+      try {
+        const data: any = await fetchJson(url)
+        const listed = data.Answer?.some((a: any) => a.data?.startsWith?.('::'))
+        results.push({ listed: !!listed, listName: provider.name, listType: provider.type, source: 'DNSBL' })
+      } catch {
+        results.push({ listed: false, listName: provider.name, listType: provider.type, source: 'DNSBL' })
+      }
+    })
+    await Promise.allSettled(lookups)
+    const latency = Date.now() - start
+    return { blacklistRecords: results, status: ds('DNSBL', 'success', latency) }
+  }
+
+  const reversed = reverseIp4(ip)
   const lookups = DNSBL_LIST.map(async (provider) => {
     const url = `https://dns.google/resolve?name=${reversed}.${provider.zone}&type=A`
     try {
@@ -120,6 +163,34 @@ export async function callDnsbl(ip: string): Promise<{
   await Promise.allSettled(lookups)
   const latency = Date.now() - start
   return { blacklistRecords: results, status: ds('DNSBL', 'success', latency) }
+}
+
+// ---- ip-api.com — free tier, no key, 45 req/min — fallback for ipapi.co ----
+export async function callIpApiCom(ip: string): Promise<{
+  geo: GeoLocation; asn: AsnInfo; networkType: NetworkTypeInfo; proxyDetection: ProxyDetection; status: DataSourceInfo
+}> {
+  const start = Date.now()
+  try {
+    const data: any = await fetchJson(`http://ip-api.com/json/${ip}?fields=status,message,country,countryCode,region,city,lat,lon,timezone,as,org,isp,proxy,hosting,mobile,query`)
+    const latency = Date.now() - start
+    if (data.status !== 'success') {
+      return { geo: { country: '', countryCode: '', region: '', city: '', latitude: null, longitude: null, timezone: '' }, asn: { asn: '', asnOrg: '', isp: '', org: null }, networkType: { type: 'unknown', confidence: 0, source: 'ip-api.com' }, proxyDetection: { isVpn: false, isProxy: false, isTor: false, isRelay: false, isHosting: false, isResidentialProxy: false, confidence: 0, source: 'ip-api.com', details: '' }, status: ds('ip-api.com', 'error', latency, data.message) }
+    }
+    const asnMatch = data.as?.match(/^(AS\d+)\s+(.+)/)
+    let ntType = 'unknown'; let ntConf = 0
+    if (data.hosting) { ntType = 'hosting'; ntConf = 60 }
+    else if (data.mobile) { ntType = 'mobile'; ntConf = 60 }
+    return {
+      geo: { country: data.country ?? '', countryCode: data.countryCode ?? '', region: data.region ?? '', city: data.city ?? '', latitude: data.lat ?? null, longitude: data.lon ?? null, timezone: data.timezone ?? '' },
+      asn: { asn: asnMatch?.[1] ?? data.as ?? '', asnOrg: asnMatch?.[2] ?? data.org ?? '', isp: data.isp ?? '', org: data.org ?? null },
+      networkType: { type: ntType as any, confidence: ntConf, source: 'ip-api.com' },
+      proxyDetection: { isVpn: false, isProxy: data.proxy ?? false, isTor: false, isRelay: false, isHosting: data.hosting ?? false, isResidentialProxy: false, confidence: (data.proxy || data.hosting) ? 60 : 0, source: 'ip-api.com', details: `Proxy:${data.proxy} Hosting:${data.hosting}` },
+      status: ds('ip-api.com', 'success', latency),
+    }
+  } catch (e: any) {
+    const latency = Date.now() - start
+    return { geo: { country: '', countryCode: '', region: '', city: '', latitude: null, longitude: null, timezone: '' }, asn: { asn: '', asnOrg: '', isp: '', org: null }, networkType: { type: 'unknown', confidence: 0, source: 'ip-api.com' }, proxyDetection: { isVpn: false, isProxy: false, isTor: false, isRelay: false, isHosting: false, isResidentialProxy: false, confidence: 0, source: 'ip-api.com', details: '' }, status: ds('ip-api.com', 'error', latency, e.message) }
+  }
 }
 
 // ---- Network quality ----
